@@ -6,7 +6,7 @@
   "scripts": {
     "clean": "rimraf ./dist",
     "build": "npm run clean && webpack --mode development",
-    "test": "npm test --prefix tasks/UploadPortalHtmlReport",
+    "test": "npm test --prefix tasks/UploadPortalHtmlReport && node --test github-action/*.test.js",
     "package": "tfx extension create --manifest-globs azure-devops-extension.json"
   },
   "repository": {

@@ -43,10 +43,13 @@
     "webpack-cli": "^3.3.11"
   },
   "dependencies": {
-    "azure-devops-extension-api": "^1.157.0",
+    "azure-devops-extension-api": "1.157.0",
     "azure-devops-extension-sdk": "2.0.11",
-    "azure-devops-ui": "^2.165.1",
+    "azure-devops-ui": "2.165.1",
     "react": "^16.13.1",
     "react-dom": "^16.13.1"
+  },
+  "overrides": {
+    "azure-devops-ui": "2.165.1"
   }
 }

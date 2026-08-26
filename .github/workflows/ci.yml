@@ -15,11 +15,11 @@ jobs:
         with:
           node-version: 20
       - name: Install extension dependencies
-        run: npm install
+        run: npm ci
       - name: Build extension
         run: npm run build
       - name: Install task dependencies
-        run: npm install
+        run: npm ci
         working-directory: tasks/UploadPortalHtmlReport
       - name: Test upload task
         run: npm test

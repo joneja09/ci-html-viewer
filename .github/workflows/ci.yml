@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [master]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -24,3 +27,21 @@ jobs:
       - name: Test upload task
         run: npm test
         working-directory: tasks/UploadPortalHtmlReport
+
+      - name: Test GitHub Action helpers
+        run: node --test github-action/*.test.js
+
+  publish-fixtures:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish fixture HTML reports
+        uses: ./
+        with:
+          report-dir: tasks/UploadPortalHtmlReport/tests/fixtures
+          name: Fixture Reports
+          fail-on-failed-reports: false
+          comment-on-pr: true

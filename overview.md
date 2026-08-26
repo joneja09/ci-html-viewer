@@ -1,8 +1,8 @@
-# HTML Report Portal
+# CI HTML Viewer
 
-Publish HTML reports and view them as a tab on Azure Pipelines build and release results. Each tab embeds the report, offers a download, and can attach a zip of the original folder.
+Publish HTML reports from Azure Pipelines (build/release tab) or GitHub Actions (job summary, artifacts, and a sticky pull request comment).
 
-Local CSS, JavaScript, and images are inlined by default so coverage-style folders render in the tab.
+Local CSS, JavaScript, and images are inlined by default so coverage-style folders render.
 
 For full documentation see [GitHub](https://github.com/joneja09/azure-pipelines-html-viewer).
 

@@ -1,12 +1,12 @@
 @import "node_modules/azure-devops-ui/Core/_platformCommon.scss";
 
-#postman-ext-container {
+#portal-ext-container {
   font-family: $fontFamily;
 }
 .bolt-tabbar-tabs {
-    font-size: $fontSizeM;
-    margin-bottom: 10px;
-  }
+  font-size: $fontSizeM;
+  margin-bottom: 10px;
+}
 
 .card-success {
   color: $status-success-foreground;
@@ -20,5 +20,7 @@
 
 iframe.full-size {
   border: 0;
-  height: 2000px;
+  width: 100%;
+  height: calc(100vh - 180px);
+  min-height: 640px;
 }

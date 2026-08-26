@@ -1,0 +1,66 @@
+{
+  "id": "4d9a74ab-346a-4549-936a-6a3d3ad77227",
+  "name": "UploadPortalHtmlReport",
+  "friendlyName": "Upload HTML Report",
+  "description": "Publish self-contained HTML reports as a tab on the pipeline run",
+  "author": "Jeff Jones",
+  "helpUrl": "https://github.com/joneja09/azure-pipelines-html-viewer#configuration",
+  "helpMarkDown": "[More Information](https://github.com/joneja09/azure-pipelines-html-viewer#configuration)",
+  "category": "Utility",
+  "visibility": [
+    "Build",
+    "Release"
+  ],
+  "demands": [],
+  "version": {
+    "Major": "1",
+    "Minor": "2",
+    "Patch": "0"
+  },
+  "minimumAgentVersion": "2.144.0",
+  "instanceNameFormat": "Upload HTML Reports",
+  "inputs": [
+    {
+      "name": "reportDir",
+      "type": "filePath",
+      "label": "Report file or directory",
+      "defaultValue": "$(System.DefaultWorkingDirectory)",
+      "required": true,
+      "helpMarkDown": "Path to a single .html/.htm file, or a directory to search recursively for HTML reports."
+    },
+    {
+      "name": "tabName",
+      "type": "string",
+      "label": "Report tab name",
+      "defaultValue": "HTML Report",
+      "required": false,
+      "helpMarkDown": "Name of the tab displayed on the pipeline run. Run the task multiple times with different tab names to publish several report groups."
+    },
+    {
+      "name": "redactSecrets",
+      "type": "boolean",
+      "label": "Redact secrets in HTML",
+      "defaultValue": false,
+      "required": false,
+      "helpMarkDown": "When enabled, Bearer tokens and common secret keys (password, access_token, etc.) are masked before upload. Intended for Postman/Newman HTML Extra reports. Leave off for generic HTML to avoid rewriting the file."
+    },
+    {
+      "name": "failOnEmpty",
+      "type": "boolean",
+      "label": "Fail if no HTML files are found",
+      "defaultValue": true,
+      "required": false,
+      "helpMarkDown": "Fails the task when the path does not contain any .html/.htm files. Disable if missing reports should only warn."
+    }
+  ],
+  "execution": {
+    "Node16": {
+      "target": "index.js",
+      "argumentFormat": ""
+    },
+    "Node20_1": {
+      "target": "index.js",
+      "argumentFormat": ""
+    }
+  }
+}

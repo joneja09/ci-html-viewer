@@ -1,5 +1,5 @@
 const tl = require("azure-pipelines-task-lib/task")
-const { resolve, join } = require("path")
+const { resolve, join, dirname } = require("path")
 const { readFileSync, writeFileSync, mkdirSync, statSync } = require("fs")
 const { tmpdir } = require("os")
 const {
@@ -7,11 +7,14 @@ const {
   displayNameFor,
   generateAttachmentName,
   isReportSuccessful,
-  redactHtmlDocument
+  redactHtmlDocument,
+  inlineLocalAssets,
+  createReportArchive
 } = require("./lib")
 
 const REPORT_TYPE = "portal.report"
 const SUMMARY_TYPE = "portal.summary"
+const ARCHIVE_TYPE = "portal.archive"
 const MAX_REDACT_BYTES = 5 * 1024 * 1024
 
 function getTempWorkDir() {
@@ -25,14 +28,24 @@ function uniqueOutputPath(workDir, relativeName) {
   return join(workDir, relativeName.replace(/[\\/]/g, "_"))
 }
 
-function run() {
+function getBool(name, defaultValue) {
+  const raw = tl.getInput(name, false)
+  if (raw === undefined || raw === null || raw === "") {
+    return defaultValue
+  }
+  return tl.getBoolInput(name, false)
+}
+
+async function run() {
   const reportDir = resolve(tl.getPathInput("reportDir", true, false))
   const tabName = tl.getInput("tabName", false) || "HTML Report"
-  const redactSecrets = tl.getBoolInput("redactSecrets", false)
-  const failOnEmpty = tl.getBoolInput("failOnEmpty", false)
+  const redactSecrets = getBool("redactSecrets", false)
+  const failOnEmpty = getBool("failOnEmpty", true)
+  const failOnFailedReports = getBool("failOnFailedReports", false)
+  const inlineAssets = getBool("inlineAssets", true)
+  const publishArchive = getBool("publishArchive", true)
 
-  statSync(reportDir)
-
+  const reportStats = statSync(reportDir)
   const files = findHtmlFiles(reportDir)
   if (files.length === 0) {
     const message = `No HTML files found in ${reportDir}`
@@ -53,9 +66,19 @@ function run() {
   files.forEach((file) => {
     const relativeName = displayNameFor(file, reportDir)
     tl.debug(`Reading report ${file}`)
-    const fileContent = readFileSync(file, "utf8")
-    let outputContent = fileContent
+    let fileContent = readFileSync(file, "utf8")
+
+    if (inlineAssets) {
+      const result = inlineLocalAssets(fileContent, file, reportStats.isDirectory() ? reportDir : dirname(file))
+      result.warnings.forEach((warning) => tl.warning(warning))
+      if (result.inlined.length) {
+        tl.debug(`Inlined ${result.inlined.length} asset(s) into ${relativeName}`)
+      }
+      fileContent = result.html
+    }
+
     const successful = isReportSuccessful(fileContent)
+    let outputContent = fileContent
 
     if (redactSecrets) {
       const bytes = Buffer.byteLength(fileContent, "utf8")
@@ -91,6 +114,30 @@ function run() {
     tl.debug(`Uploaded ${relativeName} as ${attachmentName}`)
   })
 
+  let archiveInfo = null
+  if (publishArchive && reportStats.isDirectory()) {
+    const archivePath = join(workDir, "html-reports.zip")
+    const archiveResult = await createReportArchive(reportDir, archivePath)
+    if (archiveResult.skipped) {
+      tl.warning(`Skipped report zip (${archiveResult.reason})`)
+    } else {
+      const archiveName = generateAttachmentName({
+        tabName,
+        jobName,
+        stageName,
+        stageAttempt,
+        fileName: "html-reports.zip"
+      })
+      tl.addAttachment(ARCHIVE_TYPE, archiveName, archivePath)
+      archiveInfo = {
+        name: archiveName,
+        type: ARCHIVE_TYPE,
+        fileName: "html-reports.zip"
+      }
+      console.log(`Published zip archive (${archiveResult.files} files, ${archiveResult.bytes} bytes)`)
+    }
+  }
+
   const summaryPath = join(workDir, "summary.json")
   const summaryName = generateAttachmentName({
     tabName,
@@ -99,17 +146,28 @@ function run() {
     stageAttempt,
     fileName: "summary.json"
   })
-  writeFileSync(summaryPath, JSON.stringify(fileProperties, null, 2))
+  const summaryPayload = {
+    version: 2,
+    reports: fileProperties,
+    archive: archiveInfo
+  }
+  writeFileSync(summaryPath, JSON.stringify(summaryPayload, null, 2))
   tl.addAttachment(SUMMARY_TYPE, summaryName, summaryPath)
   console.log(`Published ${fileProperties.length} HTML report(s) to tab "${tabName}"`)
+
+  const failedReports = fileProperties.filter((item) => item.successful === false)
+  if (failOnFailedReports && failedReports.length) {
+    tl.setResult(
+      tl.TaskResult.Failed,
+      `${failedReports.length} HTML report(s) contain failed tests`
+    )
+  }
 }
 
-try {
-  run()
-} catch (error) {
+run().catch((error) => {
   tl.error((error && error.message) || String(error))
   if (error && error.stack) {
     tl.debug(error.stack)
   }
   tl.setResult(tl.TaskResult.Failed, (error && error.message) || String(error))
-}
+})

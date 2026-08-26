@@ -1,6 +1,6 @@
 {
   "name": "uploadportalhtmlreport",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Publish HTML reports as Azure Pipelines attachments",
   "main": "index.js",
   "scripts": {
@@ -13,6 +13,7 @@
     "azure-pipelines-task-lib": "^4.17.3",
     "cheerio": "^1.0.0-rc.12",
     "dashify": "^2.0.0",
-    "globby": "^11.1.0"
+    "globby": "^11.1.0",
+    "jszip": "3.10.1"
   }
 }

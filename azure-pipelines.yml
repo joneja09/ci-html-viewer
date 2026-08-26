@@ -59,7 +59,7 @@ steps:
       extensionId: "html-report-portal"
       extensionTag: dev
       extensionName: "HTML Report Portal Dev"
-      extensionVersion: "1.2.$(Build.BuildId)"
+      extensionVersion: "1.3.$(Build.BuildId)"
       updateTasksVersion: true
       extensionVisibility: private
       extensionPricing: free

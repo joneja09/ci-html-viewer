@@ -15,7 +15,10 @@
         "INPUT_REPORTDIR": "${workspaceFolder}/tasks/UploadPortalHtmlReport/tests/fixtures",
         "INPUT_TABNAME": "HTML Report",
         "INPUT_REDACTSECRETS": "false",
-        "INPUT_FAILONEMPTY": "true"
+        "INPUT_FAILONEMPTY": "true",
+        "INPUT_INLINEASSETS": "true",
+        "INPUT_PUBLISHARCHIVE": "true",
+        "INPUT_FAILONFAILEDREPORTS": "false"
       },
       "skipFiles": [
         "<node_internals>/**"

@@ -1,97 +1,115 @@
-const tl = require('azure-pipelines-task-lib/task')
-const { resolve, basename, join } = require('path')
-const globby = require('globby')
-const { readFileSync, writeFileSync } = require('fs')
-const { load } = require('cheerio')
-const forbiddenKeys = ['password', 'passwd', 'client_secret', 'access_token', 'refresh_token']
-const template = /Failed Tests ([0-9]*)/
-const dashify = require('dashify')
-const hat = require('hat')
+const tl = require("azure-pipelines-task-lib/task")
+const { resolve, join } = require("path")
+const { readFileSync, writeFileSync, mkdirSync, statSync } = require("fs")
+const { tmpdir } = require("os")
+const {
+  findHtmlFiles,
+  displayNameFor,
+  generateAttachmentName,
+  isReportSuccessful,
+  redactHtmlDocument
+} = require("./lib")
 
-function run () {
+const REPORT_TYPE = "portal.report"
+const SUMMARY_TYPE = "portal.summary"
+const MAX_REDACT_BYTES = 5 * 1024 * 1024
 
-  let reportDir = resolve(tl.getPathInput('reportDirs', true))
+function getTempWorkDir() {
+  const base = tl.getVariable("Agent.TempDirectory") || tmpdir()
+  const dir = join(base, "html-report-portal", String(Date.now()))
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
 
-  let files = globby.sync([reportDir.replace(/\\/g, '/')], {expandDirectories : {files: ['*'], extensions: ['html']}})
+function uniqueOutputPath(workDir, relativeName) {
+  return join(workDir, relativeName.replace(/[\\/]/g, "_"))
+}
 
+function run() {
+  const reportDir = resolve(tl.getPathInput("reportDir", true, false))
+  const tabName = tl.getInput("tabName", false) || "HTML Report"
+  const redactSecrets = tl.getBoolInput("redactSecrets", false)
+  const failOnEmpty = tl.getBoolInput("failOnEmpty", false)
+
+  statSync(reportDir)
+
+  const files = findHtmlFiles(reportDir)
+  if (files.length === 0) {
+    const message = `No HTML files found in ${reportDir}`
+    if (failOnEmpty) {
+      tl.setResult(tl.TaskResult.Failed, message)
+    } else {
+      tl.warning(message)
+    }
+    return
+  }
+
+  const workDir = getTempWorkDir()
+  const jobName = tl.getVariable("Agent.JobName")
+  const stageName = tl.getVariable("System.StageDisplayName")
+  const stageAttempt = tl.getVariable("System.StageAttempt")
   const fileProperties = []
 
-  files.forEach(file => {
+  files.forEach((file) => {
+    const relativeName = displayNameFor(file, reportDir)
     tl.debug(`Reading report ${file}`)
-    const fileContent = readFileSync(file).toString()
-    const document = load(fileContent)
+    const fileContent = readFileSync(file, "utf8")
+    let outputContent = fileContent
+    const successful = isReportSuccessful(fileContent)
 
-    tl.debug(`Anonimizing report`)
-    // Anonimize Report
-    removeTokenFromHeader(document)
-    removeForbiddenKeys(document, "h5:contains('Request Body')")
-    removeForbiddenKeys(document, "h5:contains('Response Body')")
-    writeFileSync(file, document.html())
-
-    tl.debug(`Uploading report`)
-    const attachmentProperties = {
-      name: generateName(basename(file)),
-      type: 'portal.report',
-      successfull: checkIfSuccessful(document)
+    if (redactSecrets) {
+      const bytes = Buffer.byteLength(fileContent, "utf8")
+      if (bytes > MAX_REDACT_BYTES) {
+        tl.warning(
+          `Skipping secret redaction for ${relativeName} (${bytes} bytes); file is too large to parse safely.`
+        )
+      } else {
+        const { load } = require("cheerio")
+        const document = load(fileContent)
+        redactHtmlDocument(document)
+        outputContent = document.html()
+      }
     }
 
-    fileProperties.push(attachmentProperties)
-    tl.command('task.addattachment', attachmentProperties, file)
+    const attachmentName = generateAttachmentName({
+      tabName,
+      jobName,
+      stageName,
+      stageAttempt,
+      fileName: relativeName
+    })
+    const outPath = uniqueOutputPath(workDir, relativeName)
+    writeFileSync(outPath, outputContent)
+
+    fileProperties.push({
+      name: attachmentName,
+      type: REPORT_TYPE,
+      successful,
+      fileName: relativeName
+    })
+    tl.addAttachment(REPORT_TYPE, attachmentName, outPath)
+    tl.debug(`Uploaded ${relativeName} as ${attachmentName}`)
   })
 
-  const summaryPath = resolve(join(reportDir,'summary.json'))
-  writeFileSync(summaryPath, JSON.stringify(fileProperties))
-
-  tl.command('task.addattachment', { name: generateName('summary.json'), type: 'report.summary'}, summaryPath)
-}
-
-function generateName (fileName) {
-  const jobName = dashify(tl.getVariable('Agent.JobName'))
-  const stageName = dashify(tl.getVariable('System.StageDisplayName'))
-  const stageAttempt = tl.getVariable('System.StageAttempt')
-  const tabName = tl.getInput('tabName', false ) || 'HTML Portal'
-
-  return `${tabName}.${jobName}.${stageName}.${stageAttempt}.${fileName}`
-}
-
-function removeTokenFromHeader (document) {
-  document(`td:contains('Bearer')`).replaceWith('<td>Bearer ***</td>')
-}
-
-function checkIfSuccessful (document) {
-  const text = document("div.card-header").find("a:contains('Failed Tests')").text()
-  const result = new Number(text.match(template)[1])
-  return result > 0 ? false : true
-}
-
-function removeForbiddenKeys (document, selector) {
-  document(selector).nextAll().find(document('code')).each(function (x, y) {
-    const body = document(this).text()
-
-    try {
-      const ob = JSON.parse(body)
-
-      Object.keys(ob).forEach((k) => {
-        if (forbiddenKeys.includes(k)) {
-          ob[k] = '***'
-        }
-      })
-
-      const attributesObj = document(this).attr()
-      const attributes = Object.keys(attributesObj).map(key => {
-        return `${key}="${attributesObj[key]}"`
-      }).join(' ')
-
-      document(this).replaceWith(`<code ${attributes}>${JSON.stringify(ob, null, 2)}</code>`)
-    } catch (error) {
-      // Skip if data is non JSON
-    }
+  const summaryPath = join(workDir, "summary.json")
+  const summaryName = generateAttachmentName({
+    tabName,
+    jobName,
+    stageName,
+    stageAttempt,
+    fileName: "summary.json"
   })
+  writeFileSync(summaryPath, JSON.stringify(fileProperties, null, 2))
+  tl.addAttachment(SUMMARY_TYPE, summaryName, summaryPath)
+  console.log(`Published ${fileProperties.length} HTML report(s) to tab "${tabName}"`)
 }
 
 try {
   run()
 } catch (error) {
-  tl.warning(error.stack)
-  tl.setResult(tl.TaskResult.SucceededWithIssues)
+  tl.error((error && error.message) || String(error))
+  if (error && error.stack) {
+    tl.debug(error.stack)
+  }
+  tl.setResult(tl.TaskResult.Failed, (error && error.message) || String(error))
 }

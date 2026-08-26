@@ -1,21 +1,21 @@
 {
-  // Use IntelliSense to learn about possible attributes.
-  // Hover to view descriptions of existing attributes.
-  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
   "version": "0.2.0",
   "configurations": [
     {
       "type": "node",
       "request": "launch",
-      "name": "Upload Portal Task",
+      "name": "Upload HTML Report Task",
       "program": "${workspaceFolder}/tasks/UploadPortalHtmlReport/index.js",
       "outputCapture": "std",
       "env": {
         "AGENT_JOBNAME": "jobname",
         "SYSTEM_DISPLAYNAME": "displayname",
         "SYSTEM_STAGEDISPLAYNAME": "stagedisplayname",
-        "SYSTEM_STAGEATTEMPT": 1,
-        "INPUT_REPORTDIRS": "${workspaceFolder}/tasks/UploadPortalHtmlReport/test"
+        "SYSTEM_STAGEATTEMPT": "1",
+        "INPUT_REPORTDIR": "${workspaceFolder}/tasks/UploadPortalHtmlReport/tests/fixtures",
+        "INPUT_TABNAME": "HTML Report",
+        "INPUT_REDACTSECRETS": "false",
+        "INPUT_FAILONEMPTY": "true"
       },
       "skipFiles": [
         "<node_internals>/**"

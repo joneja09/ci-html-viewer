@@ -4,8 +4,6 @@ import * as React from "react"
 import * as ReactDOM from "react-dom"
 import * as SDK from "azure-devops-extension-sdk"
 
-import fetch from "node-fetch"
-
 import { getClient } from "azure-devops-extension-api"
 import { ReleaseEnvironment, ReleaseRestClient, ReleaseTaskAttachment } from "azure-devops-extension-api/Release"
 import { Build, BuildRestClient, Attachment } from "azure-devops-extension-api/Build"
@@ -15,16 +13,46 @@ import { ObservableValue, ObservableObject } from "azure-devops-ui/Core/Observab
 import { Observer } from "azure-devops-ui/Observer"
 import { Tab, TabBar, TabSize } from "azure-devops-ui/Tabs"
 import { Card } from "azure-devops-ui/Card"
-import { IHeaderCommandBarItem } from "azure-devops-ui/HeaderCommandBar";
+import { IHeaderCommandBarItem } from "azure-devops-ui/HeaderCommandBar"
 
-const ATTACHMENT_TYPE = "portal.summary";
-const REPORT_ATTACHMENT_TYPE = "portal.report";
+const ATTACHMENT_TYPE = "portal.summary"
+const REPORT_ATTACHMENT_TYPE = "portal.report"
 const OUR_TASK_IDS = [
-  // PROD
-  "f5384bf0-1b5c-11ea-b0cc-5b064956a213",
-  // Finastra Dev
-  "0e9f302d-865d-52f6-aba0-a0e258493f6d"
+  "4d9a74ab-346a-4549-936a-6a3d3ad77227"
 ]
+
+interface AttachmentNameParts {
+  tabName: string
+  jobName: string
+  stageName: string
+  stageAttempt: string
+  fileName: string
+}
+
+function parseAttachmentName(name: string): AttachmentNameParts {
+  const delimiter = name.indexOf("~") >= 0 ? "~" : "."
+  const parts = name.split(delimiter)
+  if (parts.length >= 5) {
+    return {
+      tabName: parts[0],
+      jobName: parts[1],
+      stageName: parts[2],
+      stageAttempt: parts[3],
+      fileName: parts.slice(4).join(delimiter)
+    }
+  }
+  return {
+    tabName: name,
+    jobName: "",
+    stageName: "",
+    stageAttempt: "",
+    fileName: name
+  }
+}
+
+function toBase64(value: string): string {
+  return btoa(value)
+}
 
 SDK.init()
 SDK.ready().then(() => {
@@ -32,40 +60,40 @@ SDK.ready().then(() => {
     const config = SDK.getConfiguration()
     if (typeof config.onBuildChanged === "function") {
       config.onBuildChanged((build: Build) => {
-        let buildAttachmentClient = new BuildAttachmentClient(build)
+        const buildAttachmentClient = new BuildAttachmentClient(build)
         buildAttachmentClient.init().then(() => {
           displayReports(buildAttachmentClient)
-        }).catch(error => {setError(error)})
+        }).catch((error) => { setError(error) })
       })
     } else if (typeof config.releaseEnvironment === "object") {
-      let releaseAttachmentClient = new ReleaseAttachmentClient(config.releaseEnvironment)
+      const releaseAttachmentClient = new ReleaseAttachmentClient(config.releaseEnvironment)
       releaseAttachmentClient.init().then(() => {
         displayReports(releaseAttachmentClient)
-      }).catch(error => {setError(error)})
+      }).catch((error) => { setError(error) })
     }
-  } catch(error) {
+  } catch (error) {
     setError(error)
   }
 })
 
-function setText (message: string) {
+function setText(message: string) {
   console.log(message)
   const messageContainer = document.querySelector("#portal-ext-message p")
   if (messageContainer) {
-    messageContainer.innerHTML = message
+    messageContainer.textContent = message
   }
-  const spinner = document.querySelector(".spinner")
-
 }
 
-function setError (error: Error) {
-  setText('Error loading reports')
+function setError(error: Error) {
+  setText("Error loading reports")
   console.log(error)
-  const spinner = document.querySelector(".spinner") as HTMLElement;
-  const errorBadge = document.querySelector('.error-badge') as HTMLElement;
-  if (spinner && errorBadge) {
-    spinner.style.display = 'none';
-    errorBadge.style.display = 'block';
+  const spinner = document.querySelector(".spinner") as HTMLElement
+  const errorBadge = document.querySelector(".error-badge") as HTMLElement
+  if (spinner) {
+    spinner.style.display = "none"
+  }
+  if (errorBadge) {
+    errorBadge.style.display = "block"
   }
 }
 
@@ -73,70 +101,84 @@ function displayReports(attachmentClient: AttachmentClient) {
   const nbAttachments = attachmentClient.getAttachments().length
   if (nbAttachments) {
     ReactDOM.render(<TaskAttachmentPanel attachmentClient={attachmentClient} />, document.getElementById("portal-ext-container"))
-    document.getElementById("portal-ext-message").style.display = "none"
+    const message = document.getElementById("portal-ext-message")
+    if (message) {
+      message.style.display = "none"
+    }
+    SDK.notifyLoadSucceeded()
   } else {
-  setError(Error("Could not find any report attachment"))
+    setError(Error("Could not find any report attachment"))
   }
 }
 
+SDK.register("registerBuild", {
+  isInvisible: function () {
+    return false
+  }
+})
+
 SDK.register("registerRelease", {
   isInvisible: function (state) {
-    let resultArray = []
-    state.releaseEnvironment.deployPhasesSnapshot.forEach(phase => {
-      phase.workflowTasks.forEach(task => {
+    const resultArray = []
+    const environment = state && state.releaseEnvironment
+    if (!(environment && environment.deployPhasesSnapshot)) {
+      return true
+    }
+    environment.deployPhasesSnapshot.forEach((phase) => {
+      (phase.workflowTasks || []).forEach((task) => {
         resultArray.push(task.taskId)
       })
     })
-    return !OUR_TASK_IDS.some(id => resultArray.includes(id))
+    return !OUR_TASK_IDS.some((id) => resultArray.indexOf(id) >= 0)
   }
 })
 
 interface ReportProps {
-  successful: boolean,
-  name: string,
+  successful: boolean
+  name: string
+  fileName: string
   href: string
 }
 
 interface ReportCardProps {
-  attachmentClient: AttachmentClient,
-  report: ReportProps,
+  attachmentClient: AttachmentClient
+  report: ReportProps
 }
 
 class ReportCard extends React.Component<ReportCardProps> {
-  private collapsed = new ObservableValue<boolean>(true);
-  private initialContent = '<p>Loading...</p>'
+  private collapsed = new ObservableValue<boolean>(true)
+  private initialContent = "<p>Loading...</p>"
   private content = new ObservableValue<string>(this.initialContent)
   private commandBarItems: IHeaderCommandBarItem[]
 
   constructor(props: ReportCardProps) {
-    super(props);
+    super(props)
     this.commandBarItems = [
       {
         important: true,
         id: "Download",
         text: "Download",
-        href: this.props.report.href,
         iconProps: {
           iconName: "Download"
-        }
+        },
+        onActivate: () => { this.downloadReport() }
       }
     ]
   }
 
   private escapeHTML(str: string) {
-    return str.replace(/[&<>'"]/g, tag => ({
-          '&': '&amp;',
-          '<': '&lt;',
-          '>': '&gt;',
-          "'": '&#39;',
-          '"': '&quot;'
-        }[tag] || tag))
+    return str.replace(/[&<>'"]/g, (tag) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      "'": "&#39;",
+      '"': "&quot;"
+    }[tag] || tag))
   }
 
   public render() {
-    const metadata = this.props.report.name.split('.')
-    // Extract HTML file name and maintain backward compatibility for old builds
-    const reportName = (metadata.length > 2) ? `${metadata[4]}.${metadata[5]}` : this.props.report.name
+    const parsed = parseAttachmentName(this.props.report.name)
+    const reportName = this.props.report.fileName || parsed.fileName || this.props.report.name
     return (
       <Card
         className={"flex-grow " + (this.props.report.successful ? "card-success" : "card-failure")}
@@ -144,30 +186,45 @@ class ReportCard extends React.Component<ReportCardProps> {
         collapsed={this.collapsed}
         onCollapseClick={this.onCollapseClicked}
         titleProps={{ text: reportName }}
-        headerIconProps={{iconName: this.props.report.successful ? 'SkypeCircleCheck' : 'StatusErrorFull'}}
+        headerIconProps={{ iconName: this.props.report.successful ? "SkypeCircleCheck" : "StatusErrorFull" }}
         headerCommandBarItems={this.commandBarItems}>
 
         <Observer content={this.content}>
           {(props: { content: string }) => {
-            return  <span className="full-size" dangerouslySetInnerHTML={ {__html: props.content} } />
+            return <span className="full-size" dangerouslySetInnerHTML={{ __html: props.content }} />
           }}
         </Observer>
       </Card>
     )
   }
 
+  private downloadReport = () => {
+    this.props.attachmentClient.download(this.props.report.href).then((report) => {
+      const blob = new Blob([report], { type: "text/html" })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement("a")
+      link.href = url
+      link.download = this.props.report.fileName || "report.html"
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+    }).catch((err) => {
+      console.error(err)
+    })
+  }
+
   private onCollapseClicked = () => {
-    this.collapsed.value = !this.collapsed.value;
+    this.collapsed.value = !this.collapsed.value
     if (this.content.value == this.initialContent) {
-      this.props.attachmentClient.download(this.props.report.href).then(report => {
-        this.content.value = '<iframe class="full-size" srcdoc="' + this.escapeHTML(report) + '"></iframe>'
-      }).catch(err => {
-        this.content.value = err
+      this.props.attachmentClient.download(this.props.report.href).then((report) => {
+        this.content.value = '<iframe class="full-size" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" srcdoc="' + this.escapeHTML(report) + '"></iframe>'
+      }).catch((err) => {
+        this.content.value = "<p>" + this.escapeHTML(String(err)) + "</p>"
       })
     }
   }
 }
-
 
 interface TaskAttachmentPanelProps {
   attachmentClient: AttachmentClient
@@ -179,16 +236,9 @@ export default class TaskAttachmentPanel extends React.Component<TaskAttachmentP
   private tabInitialContent: JSX.Element = <div className="wide"><p>Loading...</p></div>
 
   constructor(props: TaskAttachmentPanelProps) {
-    super(props);
+    super(props)
     this.selectedTabId = new ObservableValue(props.attachmentClient.getAttachments()[0].name)
     this.tabContents = new ObservableObject()
-  }
-
-  public componentDidMount() {
-    // const config = SDK.getConfiguration()
-    // SDK.notifyLoadSucceeded().then(() => {
-    //     SDK.resize()
-    // });
   }
 
   public render() {
@@ -197,81 +247,79 @@ export default class TaskAttachmentPanel extends React.Component<TaskAttachmentP
       return (null)
     } else {
       const tabs = []
-      let tabNameCount = {}
-      attachments.map(attachment => attachment.name.split('.')[0]).forEach(el => tabNameCount[el] = 1  + (tabNameCount[el] || 0))
+      const tabNameCount: { [name: string]: number } = {}
+      attachments.forEach((attachment) => {
+        const parsed = parseAttachmentName(attachment.name)
+        tabNameCount[parsed.tabName] = 1 + (tabNameCount[parsed.tabName] || 0)
+      })
       for (const attachment of attachments) {
-        const metadata = attachment.name.split('.')
-        // Conditionally add counter for multistage pipeline with more than one attempt
-        const name = (metadata[2] !== '__default' && tabNameCount[metadata[0]] > 1) ? `${metadata[0]} #${metadata[3]}` : metadata[0]
+        const parsed = parseAttachmentName(attachment.name)
+        const name = (parsed.stageName && parsed.stageName !== "__default" && tabNameCount[parsed.tabName] > 1)
+          ? `${parsed.tabName} #${parsed.stageAttempt}`
+          : parsed.tabName
 
-        tabs.push(<Tab name={name} id={attachment.name} key={attachment.name} url={attachment._links.self.href}/>)
+        tabs.push(<Tab name={name} id={attachment.name} key={attachment.name} />)
         this.tabContents.add(attachment.name, this.tabInitialContent)
       }
       return (
         <div className="flex-column">
-          { attachments.length > 1 ?
+          {attachments.length > 1 ?
             <TabBar
               onSelectedTabChanged={this.onSelectedTabChanged}
               selectedTabId={this.selectedTabId}
               tabSize={TabSize.Tall}>
               {tabs}
             </TabBar>
-          : null }
+          : null}
           <Observer selectedTabId={this.selectedTabId} tabContents={this.tabContents}>
             {(props: { selectedTabId: string }) => {
-              if ( this.tabContents.get(props.selectedTabId) === this.tabInitialContent) {
+              if (this.tabContents.get(props.selectedTabId) === this.tabInitialContent) {
                 this.props.attachmentClient.getReportSummary(props.selectedTabId).then((summary) => {
                   const cards = []
                   for (const reportData of summary) {
-                    const cardProps: ReportCardProps = {report: reportData, attachmentClient: this.props.attachmentClient}
+                    const cardProps: ReportCardProps = { report: reportData, attachmentClient: this.props.attachmentClient }
                     cards.push(<ReportCard {...cardProps} key={reportData.name} />)
                   }
                   const content = <div className="flex-column" style={{ flexWrap: "nowrap" }}>{cards}</div>
                   this.tabContents.set(props.selectedTabId, content)
-                }).catch(error => {
-                  this.tabContents.set(props.selectedTabId, <div className="wide"><p>Error loading report:<br/>' + error + '</p></div>)
+                }).catch((error) => {
+                  this.tabContents.set(props.selectedTabId, <div className="wide"><p>Error loading report:<br />{String(error)}</p></div>)
                   setError(error)
                 })
               }
-              return  this.tabContents.get(props.selectedTabId)
+              return this.tabContents.get(props.selectedTabId)
             }}
           </Observer>
         </div>
-      );
+      )
     }
   }
 
   private onSelectedTabChanged = (newTabId: string) => {
-    this.selectedTabId.value = newTabId;
+    this.selectedTabId.value = newTabId
   }
 }
 
 abstract class AttachmentClient {
-  protected attachments: (Attachment  | ReleaseTaskAttachment)[] = []
-  protected authHeaders: Object = undefined
-  protected summaryTemplate: string = undefined
-  protected appJsContent: string = undefined
-  constructor() {}
+  protected attachments: (Attachment | ReleaseTaskAttachment)[] = []
+  protected authHeaders: { [header: string]: string } = undefined
 
-  // Retrieve attachments and attachment contents from AzDO
   abstract async init(): Promise<void>
 
-  public getAttachments() : (Attachment  | ReleaseTaskAttachment)[] {
+  public getAttachments(): (Attachment | ReleaseTaskAttachment)[] {
     return this.attachments
   }
 
-  private async getAuthHeaders(): Promise<Object> {
+  private async getAuthHeaders(): Promise<{ [header: string]: string }> {
     if (this.authHeaders === undefined) {
-      console.log('Get access token')
       const accessToken = await SDK.getAccessToken()
-      const b64encodedAuth = Buffer.from(':' + accessToken).toString('base64')
-      this.authHeaders = { headers: {'Authorization': 'Basic ' + b64encodedAuth} }
+      this.authHeaders = { "Authorization": "Basic " + toBase64(":" + accessToken) }
     }
     return this.authHeaders
   }
 
   public async download(href: string): Promise<string> {
-    const response = await fetch(href, (await this.getAuthHeaders()))
+    const response = await fetch(href, { headers: await this.getAuthHeaders() })
     if (!response.ok) {
       throw new Error(response.statusText)
     }
@@ -279,31 +327,32 @@ abstract class AttachmentClient {
   }
 
   public getDownloadableAttachment(attachmentName: string): Attachment | ReleaseTaskAttachment {
-    const attachment = this.attachments.find((attachment) => { return attachment.name === attachmentName})
+    const attachment = this.attachments.find((item) => item.name === attachmentName)
     if (!(attachment && attachment._links && attachment._links.self && attachment._links.self.href)) {
       throw new Error("Attachment " + attachmentName + " is not downloadable")
     }
     return attachment
   }
 
-  abstract async getReportAttachments(): Promise<Attachment[] | ReleaseTaskAttachment[]>
+  abstract async getReportAttachments(): Promise<(Attachment | ReleaseTaskAttachment)[]>
 
   public async getReportSummary(attachmentName: string): Promise<ReportProps[]> {
-    setText('Looking for Summary File')
-    console.log("Get " + attachmentName + " attachment content")
+    setText("Looking for Summary File")
     const attachment = this.getDownloadableAttachment(attachmentName)
     const summaryContentJson = JSON.parse(await this.download(attachment._links.self.href))
-    setText('Processing Summary File')
+    setText("Processing Summary File")
     const reports = await this.getReportAttachments()
-    let data = summaryContentJson.map(report => {
-      let rp = reports.find(x => x.name === report.name)
+    return summaryContentJson.map((report) => {
+      const rp = reports.find((item) => item.name === report.name)
+      const parsed = parseAttachmentName(report.name)
+      const href = rp && rp._links && rp._links.self && rp._links.self.href
       return {
-        successful: report.successfull,
+        successful: report.successful !== undefined ? report.successful : report.successfull,
         name: report.name,
-        href: rp._links.self.href
+        fileName: report.fileName || parsed.fileName,
+        href
       }
-    })
-    return data
+    }).filter((report) => !!report.href)
   }
 }
 
@@ -316,82 +365,100 @@ class BuildAttachmentClient extends AttachmentClient {
   }
 
   public async init() {
-    console.log('Get attachment list')
     const buildClient: BuildRestClient = getClient(BuildRestClient)
     this.attachments = await buildClient.getAttachments(this.build.project.id, this.build.id, ATTACHMENT_TYPE)
   }
 
   public async getReportAttachments(): Promise<Attachment[]> {
-    console.log('Get report list')
     const buildClient: BuildRestClient = getClient(BuildRestClient)
     return await buildClient.getAttachments(this.build.project.id, this.build.id, REPORT_ATTACHMENT_TYPE)
   }
 }
 
-  class ReleaseAttachmentClient extends AttachmentClient {
-    private releaseEnvironment: ReleaseEnvironment
-    private projectId
-    private deployStepAttempt
-    private runPlanId
+class ReleaseAttachmentClient extends AttachmentClient {
+  private releaseEnvironment: ReleaseEnvironment
+  private projectId: string
+  private deployStepAttempt: number
+  private runPlanIds: string[] = []
 
-    constructor(releaseEnvironment: ReleaseEnvironment) {
-      super()
-      this.releaseEnvironment = releaseEnvironment
+  constructor(releaseEnvironment: ReleaseEnvironment) {
+    super()
+    this.releaseEnvironment = releaseEnvironment
+  }
+
+  public async init() {
+    const releaseId = this.releaseEnvironment.releaseId
+    const environmentId = this.releaseEnvironment.id
+    const projectService = await SDK.getService<IProjectPageService>(CommonServiceIds.ProjectPageService)
+    const project = await projectService.getProject()
+    const releaseClient: ReleaseRestClient = getClient(ReleaseRestClient)
+    const release = await releaseClient.getRelease(project.id, releaseId)
+    const env = release.environments.filter((item) => item.id === environmentId)[0]
+
+    if (!(env.deploySteps && env.deploySteps.length)) {
+      throw new Error("This release has not been deployed yet")
     }
 
-    public async init() {
-      const releaseId = this.releaseEnvironment.releaseId
-      const environmentId = this.releaseEnvironment.id
-      console.log('Get project')
-      const projectService = await SDK.getService<IProjectPageService>(CommonServiceIds.ProjectPageService)
-      const project = await projectService.getProject()
-      console.log('Get release')
-      const releaseClient: ReleaseRestClient = getClient(ReleaseRestClient)
-      const release = await releaseClient.getRelease(project.id, releaseId)
-      const env = release.environments.filter((e) => e.id === environmentId)[0]
+    const deployStep = env.deploySteps[env.deploySteps.length - 1]
+    if (!(deployStep.releaseDeployPhases && deployStep.releaseDeployPhases.length)) {
+      throw new Error("This release has no job")
+    }
 
-      if (!(env.deploySteps && env.deploySteps.length)) {
-        throw new Error("This release has not been deployed yet")
+    const matchingPlanIds: string[] = []
+    const allPlanIds: string[] = []
+    for (const phase of deployStep.releaseDeployPhases) {
+      if (phase.runPlanId) {
+        allPlanIds.push(phase.runPlanId)
       }
-
-      const deployStep = env.deploySteps[env.deploySteps.length - 1]
-      if (!(deployStep.releaseDeployPhases && deployStep.releaseDeployPhases.length)) {
-        throw new Error("This release has no job");
-      }
-
-      const runPlanIds = deployStep.releaseDeployPhases.map((phase) => phase.runPlanId)
-      if (!runPlanIds.length) {
-        throw new Error("There are no plan IDs");
-      } else {
-        searchForRunPlanId: {
-          for (const phase of deployStep.releaseDeployPhases) {
-            for (const deploymentJob of phase.deploymentJobs) {
-              for (const task of deploymentJob.tasks){
-                if (OUR_TASK_IDS.includes(task.task?.id)) {
-                  this.runPlanId = phase.runPlanId;
-                  break searchForRunPlanId
-                }
-              }
+      for (const deploymentJob of phase.deploymentJobs || []) {
+        for (const task of deploymentJob.tasks || []) {
+          if (task.task && OUR_TASK_IDS.indexOf(task.task.id) >= 0 && phase.runPlanId) {
+            if (matchingPlanIds.indexOf(phase.runPlanId) === -1) {
+              matchingPlanIds.push(phase.runPlanId)
             }
           }
         }
       }
-      this.projectId = project.id
-      this.deployStepAttempt = deployStep.attempt
-      console.log('Get attachment list')
-      this.attachments = await releaseClient.getReleaseTaskAttachments(project.id, releaseId, environmentId, deployStep.attempt, this.runPlanId, ATTACHMENT_TYPE)
-      if (this.attachments.length === 0) {
-        throw new Error("There is no attachment")
-      }
-      if (this.attachments.length >1) {
-        throw new Error("There is more than a single attachment, this is not expected")
-      }
     }
 
-    public async getReportAttachments(): Promise<ReleaseTaskAttachment[]> {
-      console.log('Get report list')
-      const releaseClient: ReleaseRestClient = getClient(ReleaseRestClient)
-      return await releaseClient.getReleaseTaskAttachments(this.projectId, this.releaseEnvironment.releaseId, this.releaseEnvironment.id, this.deployStepAttempt, this.runPlanId, REPORT_ATTACHMENT_TYPE)
+    this.runPlanIds = matchingPlanIds.length ? matchingPlanIds : allPlanIds
+    if (!this.runPlanIds.length) {
+      throw new Error("There are no plan IDs")
     }
 
+    this.projectId = project.id
+    this.deployStepAttempt = deployStep.attempt
+    this.attachments = []
+    for (const planId of this.runPlanIds) {
+      const planAttachments = await releaseClient.getReleaseTaskAttachments(
+        project.id,
+        releaseId,
+        environmentId,
+        deployStep.attempt,
+        planId,
+        ATTACHMENT_TYPE
+      )
+      this.attachments = this.attachments.concat(planAttachments)
+    }
+    if (this.attachments.length === 0) {
+      throw new Error("There is no attachment")
+    }
   }
+
+  public async getReportAttachments(): Promise<ReleaseTaskAttachment[]> {
+    const releaseClient: ReleaseRestClient = getClient(ReleaseRestClient)
+    let reports: ReleaseTaskAttachment[] = []
+    for (const planId of this.runPlanIds) {
+      const planReports = await releaseClient.getReleaseTaskAttachments(
+        this.projectId,
+        this.releaseEnvironment.releaseId,
+        this.releaseEnvironment.id,
+        this.deployStepAttempt,
+        planId,
+        REPORT_ATTACHMENT_TYPE
+      )
+      reports = reports.concat(planReports)
+    }
+    return reports
+  }
+}

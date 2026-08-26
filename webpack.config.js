@@ -26,14 +26,24 @@ module.exports = {
             },
             {
                 test: /\.scss$/,
-                use: ["style-loader", "css-loader", "azure-devops-ui/buildScripts/css-variables-loader", "sass-loader"]
+                use: [
+                    "style-loader",
+                    "css-loader",
+                    "azure-devops-ui/buildScripts/css-variables-loader",
+                    {
+                        loader: "sass-loader",
+                        options: {
+                            implementation: require("sass")
+                        }
+                    }
+                ]
             },
             {
                 test: /\.css$/,
                 use: ["style-loader", "css-loader"],
             },
             {
-                test: /\.woff$/,
+                test: /\.(woff|woff2)$/,
                 use: [{
                     loader: 'base64-inline-loader'
                 }]

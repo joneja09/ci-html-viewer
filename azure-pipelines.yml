@@ -3,10 +3,18 @@ trigger:
     include:
       - master
 
+pr:
+  branches:
+    include:
+      - master
+
+pool:
+  vmImage: ubuntu-latest
+
 steps:
   - task: NodeTool@0
     inputs:
-      versionSpec: "12.x"
+      versionSpec: "20.x"
 
   - task: Npm@1
     displayName: "NPM: Install Extension Dependencies"
@@ -28,13 +36,17 @@ steps:
       workingDir: tasks/UploadPortalHtmlReport
       verbose: false
 
+  - script: npm test
+    displayName: "NPM: Test Upload Task"
+    workingDirectory: tasks/UploadPortalHtmlReport
+
   - task: PackageAzureDevOpsExtension@2
     displayName: "TFX: Package Extension"
     inputs:
       rootFolder: .
       publisherId: joneja09
-      extensionName: "Portal Report"
-      extensionVisibility: public
+      extensionName: "HTML Report Portal"
+      extensionVisibility: private
       extensionPricing: free
       patternManifest: "azure-devops-extension.json"
     condition: and(succeeded(), eq(variables['Build.SourceBranchName'], 'master'))
@@ -44,45 +56,21 @@ steps:
     inputs:
       rootFolder: .
       publisherId: joneja09
-      extensionId: "azure-pipelines-portal"
+      extensionId: "html-report-portal"
       extensionTag: dev
-      extensionName: "Portal Report Dev"
-      extensionVersion: "1.0.$(Build.BuildId)"
+      extensionName: "HTML Report Portal Dev"
+      extensionVersion: "1.2.$(Build.BuildId)"
       updateTasksVersion: true
       extensionVisibility: private
       extensionPricing: free
       patternManifest: "azure-devops-extension.json"
     condition: and(succeeded(), ne(variables['Build.SourceBranchName'], 'master'))
 
-  - task: PublishAzureDevOpsExtension@2
-    displayName: "TFX: Publish Extension Dev"
-    inputs:
-      connectedServiceName: Marketplace
-      rootFolder: .
-      publisherId: joneja09
-      extensionId: "azure-pipelines-portal"
-      extensionTag: dev
-      extensionName: "Portal Report Dev"
-      extensionVersion: "1.0.$(Build.BuildId)"
-      extensionVisibility: private
-      extensionPricing: free
-      patternManifest: "azure-devops-extension.json"
-    condition: and(succeeded(), ne(variables['Build.SourceBranchName'], 'master'))
-
-  - task: ShareAzureDevOpsExtension@2
-    displayName: "TFX: Share Extension"
-    inputs:
-      connectedServiceName: Marketplace
-      method: vsix
-      vsixFile: "**.vsix"
-      accounts: "kbxltrans"
-    condition: and(succeeded(), ne(variables['Build.SourceBranchName'], 'master'))
-
   - task: CopyFiles@2
     displayName: "Copy Files"
     inputs:
       SourceFolder: "$(System.DefaultWorkingDirectory)"
-      Contents: "**.vsix"
+      Contents: "*.vsix"
       TargetFolder: "$(Build.ArtifactStagingDirectory)/results"
     condition: succeededOrFailed()
 

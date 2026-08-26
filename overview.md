@@ -1,24 +1,26 @@
-# Azure Devops Portal HTML Report
+# HTML Report Portal
 
-## About
+Publish self-contained HTML reports and view them as a tab on Azure Pipelines build and release results. Each tab embeds the report and provides a download link.
 
-This Azure DevOps extension provides task for Publishing HTML Reports into built into Azure Storage.
+Use this for Newman HTML Extra, Playwright, Cypress, coverage, or any other self-contained HTML file.
 
-Reports can be viewed as a tab in Build and Release result page. Each Tab contains embeded reports as well as direct download links.
-
-For more info please refer to documentation page on [GitHub](https://github.com/joneja09/azure-pipelines-html-viewer)
+For full documentation see [GitHub](https://github.com/joneja09/azure-pipelines-html-viewer).
 
 ## Configuration
 
-In order to use this extension first add `Upload Portal HTML Report` task to your pipeline. In your Portal HTML Report execution task add `html` reporter that will generate `HTML` reports.
+Add the **Upload HTML Report** task after your tests produce HTML output. Use `condition: succeededOrFailed()` so reports still publish when tests fail.
 
-This tasks takes two parameters - required `reportDirs` which is a ',' separated list of paths to the location(s) where the HTML reports are stored and also optional `tabName` which is the name of the tab displayed within Azure DevOps report.
+- `reportDir` (required): a single `.html`/`.htm` file, or a directory searched recursively
+- `tabName` (optional): tab label on the pipeline run
+- `redactSecrets` (optional): mask Bearer tokens and common secret keys (useful for Postman/Newman reports)
+- `failOnEmpty` (optional): fail when no HTML files are found
 
-```YAML
+```yaml
 steps:
 - task: UploadPortalHtmlReport@1
-  displayName: 'Upload Portal Html Report'
+  displayName: Upload HTML reports
+  condition: succeededOrFailed()
   inputs:
-    cwd: '$(System.DefaultWorkingDirectory)'
-    tabName: 'Portal Test'
+    reportDir: '$(System.DefaultWorkingDirectory)/reports'
+    tabName: 'Test Reports'
 ```

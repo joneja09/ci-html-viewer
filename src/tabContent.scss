@@ -20,5 +20,7 @@
 
 iframe.full-size {
   border: 0;
-  height: 2000px;
+  width: 100%;
+  height: calc(100vh - 180px);
+  min-height: 640px;
 }

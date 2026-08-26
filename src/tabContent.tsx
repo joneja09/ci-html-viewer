@@ -13,10 +13,12 @@ import { ObservableValue, ObservableObject } from "azure-devops-ui/Core/Observab
 import { Observer } from "azure-devops-ui/Observer"
 import { Tab, TabBar, TabSize } from "azure-devops-ui/Tabs"
 import { Card } from "azure-devops-ui/Card"
+import { Button } from "azure-devops-ui/Button"
 import { IHeaderCommandBarItem } from "azure-devops-ui/HeaderCommandBar"
 
 const ATTACHMENT_TYPE = "portal.summary"
 const REPORT_ATTACHMENT_TYPE = "portal.report"
+const ARCHIVE_ATTACHMENT_TYPE = "portal.archive"
 const OUR_TASK_IDS = [
   "4d9a74ab-346a-4549-936a-6a3d3ad77227"
 ]
@@ -50,8 +52,32 @@ function parseAttachmentName(name: string): AttachmentNameParts {
   }
 }
 
+function parseSummaryPayload(payload: any): { reports: any[], archive: any } {
+  if (Array.isArray(payload)) {
+    return { reports: payload, archive: null }
+  }
+  if (payload && typeof payload === "object") {
+    return {
+      reports: payload.reports || [],
+      archive: payload.archive || null
+    }
+  }
+  return { reports: [], archive: null }
+}
+
 function toBase64(value: string): string {
   return btoa(value)
+}
+
+function triggerBlobDownload(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement("a")
+  link.href = url
+  link.download = fileName
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
 }
 
 SDK.init()
@@ -140,9 +166,21 @@ interface ReportProps {
   href: string
 }
 
+interface ArchiveProps {
+  name: string
+  fileName: string
+  href: string
+}
+
+interface SummaryResult {
+  reports: ReportProps[]
+  archive: ArchiveProps
+}
+
 interface ReportCardProps {
   attachmentClient: AttachmentClient
   report: ReportProps
+  startExpanded?: boolean
 }
 
 class ReportCard extends React.Component<ReportCardProps> {
@@ -150,9 +188,11 @@ class ReportCard extends React.Component<ReportCardProps> {
   private initialContent = "<p>Loading...</p>"
   private content = new ObservableValue<string>(this.initialContent)
   private commandBarItems: IHeaderCommandBarItem[]
+  private objectUrl: string = null
 
   constructor(props: ReportCardProps) {
     super(props)
+    this.collapsed = new ObservableValue(!props.startExpanded)
     this.commandBarItems = [
       {
         important: true,
@@ -166,14 +206,16 @@ class ReportCard extends React.Component<ReportCardProps> {
     ]
   }
 
-  private escapeHTML(str: string) {
-    return str.replace(/[&<>'"]/g, (tag) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      "'": "&#39;",
-      '"': "&quot;"
-    }[tag] || tag))
+  public componentDidMount() {
+    if (this.props.startExpanded) {
+      this.loadReport()
+    }
+  }
+
+  public componentWillUnmount() {
+    if (this.objectUrl) {
+      URL.revokeObjectURL(this.objectUrl)
+    }
   }
 
   public render() {
@@ -200,28 +242,32 @@ class ReportCard extends React.Component<ReportCardProps> {
 
   private downloadReport = () => {
     this.props.attachmentClient.download(this.props.report.href).then((report) => {
-      const blob = new Blob([report], { type: "text/html" })
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement("a")
-      link.href = url
-      link.download = this.props.report.fileName || "report.html"
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      URL.revokeObjectURL(url)
+      triggerBlobDownload(new Blob([report], { type: "text/html" }), this.props.report.fileName || "report.html")
     }).catch((err) => {
       console.error(err)
     })
   }
 
+  private loadReport = () => {
+    if (this.content.value != this.initialContent) {
+      return
+    }
+    this.props.attachmentClient.download(this.props.report.href).then((report) => {
+      if (this.objectUrl) {
+        URL.revokeObjectURL(this.objectUrl)
+      }
+      const blob = new Blob([report], { type: "text/html" })
+      this.objectUrl = URL.createObjectURL(blob)
+      this.content.value = '<iframe class="full-size" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" src="' + this.objectUrl + '"></iframe>'
+    }).catch((err) => {
+      this.content.value = "<p>" + String(err).replace(/[&<>'"]/g, "") + "</p>"
+    })
+  }
+
   private onCollapseClicked = () => {
     this.collapsed.value = !this.collapsed.value
-    if (this.content.value == this.initialContent) {
-      this.props.attachmentClient.download(this.props.report.href).then((report) => {
-        this.content.value = '<iframe class="full-size" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" srcdoc="' + this.escapeHTML(report) + '"></iframe>'
-      }).catch((err) => {
-        this.content.value = "<p>" + this.escapeHTML(String(err)) + "</p>"
-      })
+    if (!this.collapsed.value) {
+      this.loadReport()
     }
   }
 }
@@ -276,11 +322,29 @@ export default class TaskAttachmentPanel extends React.Component<TaskAttachmentP
               if (this.tabContents.get(props.selectedTabId) === this.tabInitialContent) {
                 this.props.attachmentClient.getReportSummary(props.selectedTabId).then((summary) => {
                   const cards = []
-                  for (const reportData of summary) {
-                    const cardProps: ReportCardProps = { report: reportData, attachmentClient: this.props.attachmentClient }
+                  const startExpanded = summary.reports.length === 1
+                  for (const reportData of summary.reports) {
+                    const cardProps: ReportCardProps = {
+                      report: reportData,
+                      attachmentClient: this.props.attachmentClient,
+                      startExpanded
+                    }
                     cards.push(<ReportCard {...cardProps} key={reportData.name} />)
                   }
-                  const content = <div className="flex-column" style={{ flexWrap: "nowrap" }}>{cards}</div>
+                  const content = (
+                    <div className="flex-column" style={{ flexWrap: "nowrap" }}>
+                      {summary.archive ?
+                        <div className="archive-bar">
+                          <Button
+                            text="Download all"
+                            iconProps={{ iconName: "Download" }}
+                            onClick={() => this.downloadArchive(summary.archive)}
+                          />
+                        </div>
+                      : null}
+                      {cards}
+                    </div>
+                  )
                   this.tabContents.set(props.selectedTabId, content)
                 }).catch((error) => {
                   this.tabContents.set(props.selectedTabId, <div className="wide"><p>Error loading report:<br />{String(error)}</p></div>)
@@ -295,6 +359,14 @@ export default class TaskAttachmentPanel extends React.Component<TaskAttachmentP
     }
   }
 
+  private downloadArchive = (archive: ArchiveProps) => {
+    this.props.attachmentClient.downloadBinary(archive.href).then((blob) => {
+      triggerBlobDownload(blob, archive.fileName || "html-reports.zip")
+    }).catch((err) => {
+      console.error(err)
+    })
+  }
+
   private onSelectedTabChanged = (newTabId: string) => {
     this.selectedTabId.value = newTabId
   }
@@ -305,6 +377,7 @@ abstract class AttachmentClient {
   protected authHeaders: { [header: string]: string } = undefined
 
   abstract async init(): Promise<void>
+  abstract async getAttachmentsOfType(type: string): Promise<(Attachment | ReleaseTaskAttachment)[]>
 
   public getAttachments(): (Attachment | ReleaseTaskAttachment)[] {
     return this.attachments
@@ -326,6 +399,14 @@ abstract class AttachmentClient {
     return await response.text()
   }
 
+  public async downloadBinary(href: string): Promise<Blob> {
+    const response = await fetch(href, { headers: await this.getAuthHeaders() })
+    if (!response.ok) {
+      throw new Error(response.statusText)
+    }
+    return await response.blob()
+  }
+
   public getDownloadableAttachment(attachmentName: string): Attachment | ReleaseTaskAttachment {
     const attachment = this.attachments.find((item) => item.name === attachmentName)
     if (!(attachment && attachment._links && attachment._links.self && attachment._links.self.href)) {
@@ -334,15 +415,18 @@ abstract class AttachmentClient {
     return attachment
   }
 
-  abstract async getReportAttachments(): Promise<(Attachment | ReleaseTaskAttachment)[]>
+  public async getReportAttachments(): Promise<(Attachment | ReleaseTaskAttachment)[]> {
+    return this.getAttachmentsOfType(REPORT_ATTACHMENT_TYPE)
+  }
 
-  public async getReportSummary(attachmentName: string): Promise<ReportProps[]> {
+  public async getReportSummary(attachmentName: string): Promise<SummaryResult> {
     setText("Looking for Summary File")
     const attachment = this.getDownloadableAttachment(attachmentName)
-    const summaryContentJson = JSON.parse(await this.download(attachment._links.self.href))
+    const payload = parseSummaryPayload(JSON.parse(await this.download(attachment._links.self.href)))
     setText("Processing Summary File")
-    const reports = await this.getReportAttachments()
-    return summaryContentJson.map((report) => {
+    const reports = await this.getAttachmentsOfType(REPORT_ATTACHMENT_TYPE)
+    const archives = await this.getAttachmentsOfType(ARCHIVE_ATTACHMENT_TYPE)
+    const mappedReports = payload.reports.map((report) => {
       const rp = reports.find((item) => item.name === report.name)
       const parsed = parseAttachmentName(report.name)
       const href = rp && rp._links && rp._links.self && rp._links.self.href
@@ -353,6 +437,20 @@ abstract class AttachmentClient {
         href
       }
     }).filter((report) => !!report.href)
+
+    let archive: ArchiveProps = null
+    if (payload.archive && payload.archive.name) {
+      const match = archives.find((item) => item.name === payload.archive.name)
+      if (match && match._links && match._links.self && match._links.self.href) {
+        archive = {
+          name: payload.archive.name,
+          fileName: payload.archive.fileName || "html-reports.zip",
+          href: match._links.self.href
+        }
+      }
+    }
+
+    return { reports: mappedReports, archive }
   }
 }
 
@@ -369,9 +467,9 @@ class BuildAttachmentClient extends AttachmentClient {
     this.attachments = await buildClient.getAttachments(this.build.project.id, this.build.id, ATTACHMENT_TYPE)
   }
 
-  public async getReportAttachments(): Promise<Attachment[]> {
+  public async getAttachmentsOfType(type: string): Promise<Attachment[]> {
     const buildClient: BuildRestClient = getClient(BuildRestClient)
-    return await buildClient.getAttachments(this.build.project.id, this.build.id, REPORT_ATTACHMENT_TYPE)
+    return await buildClient.getAttachments(this.build.project.id, this.build.id, type)
   }
 }
 
@@ -445,9 +543,9 @@ class ReleaseAttachmentClient extends AttachmentClient {
     }
   }
 
-  public async getReportAttachments(): Promise<ReleaseTaskAttachment[]> {
+  public async getAttachmentsOfType(type: string): Promise<ReleaseTaskAttachment[]> {
     const releaseClient: ReleaseRestClient = getClient(ReleaseRestClient)
-    let reports: ReleaseTaskAttachment[] = []
+    let results: ReleaseTaskAttachment[] = []
     for (const planId of this.runPlanIds) {
       const planReports = await releaseClient.getReleaseTaskAttachments(
         this.projectId,
@@ -455,10 +553,10 @@ class ReleaseAttachmentClient extends AttachmentClient {
         this.releaseEnvironment.id,
         this.deployStepAttempt,
         planId,
-        REPORT_ATTACHMENT_TYPE
+        type
       )
-      reports = reports.concat(planReports)
+      results = results.concat(planReports)
     }
-    return reports
+    return results
   }
 }

@@ -1,7 +1,7 @@
 "use strict"
 
-const { resolve, relative, basename, dirname, extname } = require("path")
-const { statSync } = require("fs")
+const { resolve, relative, basename, dirname, extname, isAbsolute, join } = require("path")
+const { statSync, existsSync, readFileSync, writeFileSync } = require("fs")
 const globby = require("globby")
 const dashify = require("dashify")
 
@@ -20,6 +20,28 @@ const FORBIDDEN_KEYS = [
 const HTML_EXT = new Set([".html", ".htm"])
 const ATTACHMENT_DELIMITER = "~"
 const FAILED_TESTS_RE = /Failed Tests\s+([0-9]+)/i
+const PLAYWRIGHT_UNEXPECTED_RE = /"unexpected"\s*:\s*([0-9]+)/
+const ARCHIVE_IGNORE = ["**/node_modules/**", "**/.git/**", "**/.DS_Store"]
+const MAX_INLINE_ASSET_BYTES = 2 * 1024 * 1024
+const DEFAULT_MAX_ARCHIVE_BYTES = 50 * 1024 * 1024
+
+const MIME_TYPES = {
+  ".css": "text/css",
+  ".js": "application/javascript",
+  ".mjs": "application/javascript",
+  ".json": "application/json",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".svg": "image/svg+xml",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".eot": "application/vnd.ms-fontobject"
+}
 
 function toPosix(filePath) {
   return filePath.replace(/\\/g, "/")
@@ -27,6 +49,17 @@ function toPosix(filePath) {
 
 function isHtmlFile(filePath) {
   return HTML_EXT.has(extname(filePath).toLowerCase())
+}
+
+function sortHtmlFiles(files) {
+  return files.slice().sort((left, right) => {
+    const leftIndex = basename(left).toLowerCase() === "index.html" ? 0 : 1
+    const rightIndex = basename(right).toLowerCase() === "index.html" ? 0 : 1
+    if (leftIndex !== rightIndex) {
+      return leftIndex - rightIndex
+    }
+    return toPosix(left).localeCompare(toPosix(right))
+  })
 }
 
 function findHtmlFiles(inputPath) {
@@ -44,14 +77,14 @@ function findHtmlFiles(inputPath) {
     throw new Error(`Path is not a file or directory: ${resolved}`)
   }
 
-  return globby
-    .sync(["**/*.{html,htm,HTML,HTM}"], {
+  return sortHtmlFiles(
+    globby.sync(["**/*.{html,htm,HTML,HTM}"], {
       cwd: resolved,
       absolute: true,
       onlyFiles: true,
       followSymbolicLinks: false
     })
-    .sort()
+  )
 }
 
 function displayNameFor(filePath, rootPath) {
@@ -108,9 +141,13 @@ function isReportSuccessful(html) {
   if (typeof html !== "string") {
     return true
   }
-  const match = html.match(FAILED_TESTS_RE)
-  if (match) {
-    return Number(match[1]) === 0
+  const newman = html.match(FAILED_TESTS_RE)
+  if (newman) {
+    return Number(newman[1]) === 0
+  }
+  const playwright = html.match(PLAYWRIGHT_UNEXPECTED_RE)
+  if (playwright) {
+    return Number(playwright[1]) === 0
   }
   return true
 }
@@ -170,16 +207,207 @@ function redactHtmlDocument(document) {
   return document
 }
 
+function isRemoteOrSpecial(href) {
+  const value = String(href || "").trim()
+  if (!value) {
+    return true
+  }
+  if (/^(data:|https?:|\/\/|blob:|mailto:|javascript:)/i.test(value)) {
+    return true
+  }
+  if (value.charAt(0) === "#") {
+    return true
+  }
+  return false
+}
+
+function resolveLocalPath(fromFile, href, rootDir) {
+  if (isRemoteOrSpecial(href)) {
+    return null
+  }
+  const cleaned = String(href).trim().split("#")[0].split("?")[0]
+  if (!cleaned) {
+    return null
+  }
+  const resolved = resolve(dirname(fromFile), cleaned)
+  const root = resolve(rootDir)
+  const rel = relative(root, resolved)
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) {
+    return null
+  }
+  if (!existsSync(resolved) || !statSync(resolved).isFile()) {
+    return null
+  }
+  return resolved
+}
+
+function mimeFor(filePath) {
+  return MIME_TYPES[extname(filePath).toLowerCase()] || "application/octet-stream"
+}
+
+function toDataUri(filePath) {
+  const buffer = readFileSync(filePath)
+  return `data:${mimeFor(filePath)};base64,${buffer.toString("base64")}`
+}
+
+function inlineCssUrls(cssText, cssFilePath, rootDir, warnings) {
+  return cssText.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g, (match, quote, rawUrl) => {
+    const local = resolveLocalPath(cssFilePath, rawUrl.trim(), rootDir)
+    if (!local) {
+      return match
+    }
+    if (statSync(local).size > MAX_INLINE_ASSET_BYTES) {
+      warnings.push(`Skipped large CSS asset ${displayNameFor(local, rootDir)}`)
+      return match
+    }
+    return `url(${quote}${toDataUri(local)}${quote})`
+  })
+}
+
+function inlineLocalAssets(html, htmlPath, rootDir) {
+  const warnings = []
+  const inlined = []
+  const { load } = require("cheerio")
+  const document = load(html)
+  const root = rootDir || dirname(htmlPath)
+
+  function takeLocal(href) {
+    const local = resolveLocalPath(htmlPath, href, root)
+    if (!local) {
+      return null
+    }
+    if (statSync(local).size > MAX_INLINE_ASSET_BYTES) {
+      warnings.push(`Skipped large asset ${displayNameFor(local, root)}`)
+      return null
+    }
+    return local
+  }
+
+  document('link[rel="stylesheet"][href]').each(function () {
+    const href = document(this).attr("href")
+    const local = takeLocal(href)
+    if (!local) {
+      return
+    }
+    const css = inlineCssUrls(readFileSync(local, "utf8"), local, root, warnings)
+    const media = document(this).attr("media")
+    const mediaAttr = media ? ` media="${media}"` : ""
+    document(this).replaceWith(`<style${mediaAttr}>\n${css}\n</style>`)
+    inlined.push(displayNameFor(local, root))
+  })
+
+  document("script[src]").each(function () {
+    const src = document(this).attr("src")
+    const local = takeLocal(src)
+    if (!local) {
+      return
+    }
+    const type = (document(this).attr("type") || "").toLowerCase()
+    const source = readFileSync(local, "utf8")
+    if (type === "module" && /\bimport\s/.test(source)) {
+      warnings.push(`Cannot fully inline ES module ${displayNameFor(local, root)}`)
+      return
+    }
+    const safe = source.replace(/<\/script/gi, "<\\/script")
+    const typeAttr = type ? ` type="${document(this).attr("type")}"` : ""
+    document(this).replaceWith(`<script${typeAttr}>\n${safe}\n</script>`)
+    inlined.push(displayNameFor(local, root))
+  })
+
+  document("img[src], source[src], video[src], audio[src], image[href], image[xlink\\:href]").each(function () {
+    const attr = document(this).attr("src") ? "src" : document(this).attr("href") ? "href" : "xlink:href"
+    const value = document(this).attr(attr)
+    const local = takeLocal(value)
+    if (!local) {
+      return
+    }
+    document(this).attr(attr, toDataUri(local))
+    inlined.push(displayNameFor(local, root))
+  })
+
+  document('link[rel="icon"][href], link[rel="shortcut icon"][href]').each(function () {
+    const href = document(this).attr("href")
+    const local = takeLocal(href)
+    if (!local) {
+      return
+    }
+    document(this).attr("href", toDataUri(local))
+    inlined.push(displayNameFor(local, root))
+  })
+
+  return {
+    html: document.html(),
+    inlined,
+    warnings
+  }
+}
+
+function listArchiveFiles(rootDir) {
+  return globby.sync(["**/*"], {
+    cwd: rootDir,
+    absolute: false,
+    onlyFiles: true,
+    followSymbolicLinks: false,
+    ignore: ARCHIVE_IGNORE
+  }).sort()
+}
+
+async function createReportArchive(rootDir, outPath, maxBytes) {
+  const JSZip = require("jszip")
+  const limit = maxBytes || DEFAULT_MAX_ARCHIVE_BYTES
+  const files = listArchiveFiles(rootDir)
+  if (files.length === 0) {
+    return { skipped: true, reason: "no files" }
+  }
+
+  let total = 0
+  const zip = new JSZip()
+  for (let i = 0; i < files.length; i++) {
+    const rel = files[i]
+    const abs = join(rootDir, rel)
+    total += statSync(abs).size
+    if (total > limit) {
+      return { skipped: true, reason: "archive would exceed size limit", bytes: total }
+    }
+    zip.file(toPosix(rel), readFileSync(abs))
+  }
+
+  const buffer = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" })
+  writeFileSync(outPath, buffer)
+  return { skipped: false, bytes: buffer.length, files: files.length }
+}
+
+function parseSummaryPayload(payload) {
+  if (Array.isArray(payload)) {
+    return { reports: payload, archive: null }
+  }
+  if (payload && typeof payload === "object") {
+    return {
+      reports: payload.reports || [],
+      archive: payload.archive || null
+    }
+  }
+  return { reports: [], archive: null }
+}
+
 module.exports = {
   ATTACHMENT_DELIMITER,
+  DEFAULT_MAX_ARCHIVE_BYTES,
   FORBIDDEN_KEYS,
+  MAX_INLINE_ASSET_BYTES,
+  createReportArchive,
   displayNameFor,
   findHtmlFiles,
   generateAttachmentName,
+  inlineLocalAssets,
   isHtmlFile,
   isReportSuccessful,
+  listArchiveFiles,
   parseAttachmentName,
+  parseSummaryPayload,
   redactHtmlDocument,
   redactObject,
-  shouldRedactKey
+  resolveLocalPath,
+  shouldRedactKey,
+  sortHtmlFiles
 }

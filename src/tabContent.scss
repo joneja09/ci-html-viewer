@@ -24,3 +24,9 @@ iframe.full-size {
   height: calc(100vh - 180px);
   min-height: 640px;
 }
+
+.archive-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 12px 0;
+}

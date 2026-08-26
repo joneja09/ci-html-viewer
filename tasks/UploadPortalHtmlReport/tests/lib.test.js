@@ -1,6 +1,8 @@
 const { test, describe } = require("node:test")
 const assert = require("node:assert/strict")
 const { join } = require("path")
+const { mkdtempSync, writeFileSync, mkdirSync, readFileSync } = require("fs")
+const { tmpdir } = require("os")
 const { load } = require("cheerio")
 const {
   findHtmlFiles,
@@ -10,7 +12,11 @@ const {
   isReportSuccessful,
   redactObject,
   redactHtmlDocument,
-  shouldRedactKey
+  shouldRedactKey,
+  inlineLocalAssets,
+  createReportArchive,
+  parseSummaryPayload,
+  sortHtmlFiles
 } = require("../lib")
 
 const fixtures = join(__dirname, "fixtures")
@@ -91,6 +97,11 @@ describe("isReportSuccessful", () => {
   test("does not throw when Failed Tests is missing", () => {
     assert.equal(isReportSuccessful("<html></html>"), true)
   })
+
+  test("detects Playwright unexpected failures", () => {
+    assert.equal(isReportSuccessful('{"stats":{"expected":3,"unexpected":2}}'), false)
+    assert.equal(isReportSuccessful('{"stats":{"expected":3,"unexpected":0}}'), true)
+  })
 })
 
 describe("secret redaction", () => {
@@ -126,3 +137,90 @@ describe("secret redaction", () => {
     assert.match(output, /"user": "ada"/)
   })
 })
+
+describe("sortHtmlFiles", () => {
+  test("puts index.html first", () => {
+    const sorted = sortHtmlFiles([
+      "/tmp/reports/other.html",
+      "/tmp/reports/index.html",
+      "/tmp/reports/about.html"
+    ]).map((file) => file.split("/").pop())
+    assert.deepEqual(sorted, ["index.html", "about.html", "other.html"])
+  })
+})
+
+describe("inlineLocalAssets", () => {
+  test("inlines local css, js, images, and css url() references", () => {
+    const dir = mkdtempSync(join(tmpdir(), "html-inline-"))
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      "base64"
+    )
+    writeFileSync(join(dir, "logo.png"), png)
+    writeFileSync(join(dir, "style.css"), "body { background: url('./logo.png'); color: red; }")
+    writeFileSync(join(dir, "app.js"), "window.READY = true;")
+    writeFileSync(
+      join(dir, "index.html"),
+      "<html><head><link rel=\"stylesheet\" href=\"style.css\"></head><body><img src=\"logo.png\"><script src=\"app.js\"></script></body></html>"
+    )
+
+    const result = inlineLocalAssets(
+      readFileSync(join(dir, "index.html"), "utf8"),
+      join(dir, "index.html"),
+      dir
+    )
+    assert.equal(result.warnings.length, 0)
+    assert.ok(result.inlined.indexOf("style.css") >= 0)
+    assert.ok(result.inlined.indexOf("app.js") >= 0)
+    assert.doesNotMatch(result.html, /href="style\.css"/)
+    assert.doesNotMatch(result.html, /src="app\.js"/)
+    assert.doesNotMatch(result.html, /src="logo\.png"/)
+    assert.match(result.html, /<style>/)
+    assert.match(result.html, /window\.READY = true/)
+    assert.match(result.html, /data:image\/png;base64,/)
+    assert.match(result.html, /data:image\/png;base64,/)
+  })
+
+  test("leaves remote and missing assets alone", () => {
+    const dir = mkdtempSync(join(tmpdir(), "html-inline-remote-"))
+    const html = "<html><head><link rel=\"stylesheet\" href=\"https://cdn.example/app.css\"></head><body><img src=\"missing.png\"></body></html>"
+    writeFileSync(join(dir, "index.html"), html)
+    const result = inlineLocalAssets(html, join(dir, "index.html"), dir)
+    assert.match(result.html, /https:\/\/cdn\.example\/app\.css/)
+    assert.match(result.html, /src="missing\.png"/)
+  })
+})
+
+describe("createReportArchive", () => {
+  test("zips directory files and skips node_modules", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "html-zip-"))
+    mkdirSync(join(dir, "node_modules", "pkg"), { recursive: true })
+    writeFileSync(join(dir, "index.html"), "<html></html>")
+    writeFileSync(join(dir, "style.css"), "body{}")
+    writeFileSync(join(dir, "node_modules", "pkg", "index.js"), "module.exports=1")
+    const out = join(dir, "out.zip")
+    const result = await createReportArchive(dir, out)
+    assert.equal(result.skipped, false)
+    assert.equal(result.files, 2)
+    assert.ok(readFileSync(out).length > 0)
+  })
+})
+
+describe("parseSummaryPayload", () => {
+  test("reads legacy array summaries", () => {
+    const parsed = parseSummaryPayload([{ name: "a", successful: true }])
+    assert.equal(parsed.reports.length, 1)
+    assert.equal(parsed.archive, null)
+  })
+
+  test("reads version 2 summaries with an archive", () => {
+    const parsed = parseSummaryPayload({
+      version: 2,
+      reports: [{ name: "a" }],
+      archive: { name: "zip", fileName: "html-reports.zip" }
+    })
+    assert.equal(parsed.reports.length, 1)
+    assert.equal(parsed.archive.fileName, "html-reports.zip")
+  })
+})
+

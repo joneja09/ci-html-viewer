@@ -1,8 +1,8 @@
 # Azure DevOps HTML Report Portal
 
-Publish self-contained HTML reports (Newman HTML Extra, Playwright, Cypress, coverage, or any other HTML file) and view them as a tab on Azure Pipelines build and release results.
+Publish HTML reports and view them as a tab on Azure Pipelines build and release results.
 
-Each tab embeds the report in the pipeline UI and provides a download link.
+Each tab embeds the report in the pipeline UI, with per-report download and an optional zip of the whole folder.
 
 This project is a fork of [maciejmaciejewski/azure-pipelines-postman](https://github.com/maciejmaciejewski/azure-pipelines-postman), generalized beyond Postman reports.
 
@@ -10,14 +10,17 @@ This project is a fork of [maciejmaciejewski/azure-pipelines-postman](https://gi
 
 Add the **Upload HTML Report** task after your tests produce HTML output. Use `condition: succeededOrFailed()` so reports still publish when tests fail.
 
-The task takes:
+| Input | Default | Description |
+| --- | --- | --- |
+| `reportDir` | `$(System.DefaultWorkingDirectory)` | A single `.html`/`.htm` file, or a directory searched recursively |
+| `tabName` | `HTML Report` | Tab label on the pipeline run |
+| `inlineAssets` | `true` | Embed local CSS, JS, and images so multi-file reports (coverage, etc.) render in the tab |
+| `publishArchive` | `true` | Attach a zip of a report **directory** (skipped above 50 MB; `node_modules` is omitted) |
+| `redactSecrets` | `false` | Mask Bearer tokens and common secret keys (useful for Newman HTML Extra) |
+| `failOnEmpty` | `true` | Fail when no HTML files are found |
+| `failOnFailedReports` | `false` | Fail after upload when a report looks unsuccessful (Newman failed tests or Playwright `unexpected` count) |
 
-- `reportDir` (required) — a single `.html`/`.htm` file, or a directory that is searched recursively
-- `tabName` (optional) — tab label on the pipeline run (default: `HTML Report`)
-- `redactSecrets` (optional) — mask Bearer tokens and common secret keys before upload (default: `false`)
-- `failOnEmpty` (optional) — fail the task when no HTML files are found (default: `true`)
-
-Reports should be **self-contained** HTML (CSS/JS inlined). Companion assets such as Playwright's `playwright-report/` folder are not published as a static site.
+`index.html` is listed first when a directory contains several HTML files. A single report is expanded automatically in the tab.
 
 ```yaml
 steps:
@@ -39,16 +42,19 @@ steps:
     reportDir: '$(System.DefaultWorkingDirectory)/reports/newman.html'
     tabName: 'Postman'
     redactSecrets: true
+    failOnFailedReports: true
 ```
 
-### Directory of reports
+### Coverage or other multi-file HTML
+
+Local `link`, `script`, and `img` references are inlined into each HTML file before upload. That is enough for typical coverage folders (JaCoCo, Istanbul). Playwright/Cypress apps that `fetch()` extra JSON at runtime still need a self-contained HTML export, or use **Download all** for the original folder.
 
 ```yaml
 - task: UploadPortalHtmlReport@1
   condition: succeededOrFailed()
   inputs:
-    reportDir: '$(System.DefaultWorkingDirectory)/reports'
-    tabName: 'QA Reports'
+    reportDir: '$(System.DefaultWorkingDirectory)/coverage'
+    tabName: 'Coverage'
 ```
 
 Run the task more than once with different `tabName` values to publish multiple report groups.

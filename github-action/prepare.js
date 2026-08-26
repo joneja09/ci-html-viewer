@@ -33,9 +33,37 @@ function commentMarker(name) {
 }
 
 function sanitizeArtifactName(name) {
-  return String(name || "html-report")
-    .replace(/["<>:|?*\\/\r\n]/g, "-")
-    .trim() || "html-report"
+  const cleaned = String(name || "html-report")
+    .replace(/["<>:|?*\\/\r\n]+/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .trim()
+  return cleaned || "html-report"
+}
+
+function githubPagesPreviewUrl({ owner, repo, prNumber, artifactName }) {
+  if (!owner || !repo || !prNumber || !artifactName) {
+    return ""
+  }
+  return `https://${owner}.github.io/${repo}/pr/${prNumber}/${sanitizeArtifactName(artifactName)}`
+}
+
+function htmlFileUrl(previewBaseUrl, fileName) {
+  if (!previewBaseUrl) {
+    return ""
+  }
+  const base = String(previewBaseUrl).replace(/\/$/, "")
+  const path = String(fileName || "").split("/").map(encodeURIComponent).join("/")
+  return base + "/" + path
+}
+
+function reportCell(fileName, previewBaseUrl) {
+  const url = htmlFileUrl(previewBaseUrl, fileName)
+  if (!url) {
+    return fileName
+  }
+  return `[${fileName}](${url})`
 }
 
 function statusLabel(successful) {
@@ -46,7 +74,7 @@ function statusIcon(successful) {
   return successful ? "✅" : "❌"
 }
 
-function buildCommentMarkdown({ name, reports, failedCount, runUrl, artifactName, archiveIncluded }) {
+function buildCommentMarkdown({ name, reports, failedCount, runUrl, artifactName, archiveIncluded, previewBaseUrl }) {
   const marker = commentMarker(name)
   const passedCount = reports.length - failedCount
   const headline = failedCount
@@ -54,17 +82,23 @@ function buildCommentMarkdown({ name, reports, failedCount, runUrl, artifactName
     : `**${passedCount} passed**`
 
   const rows = reports
-    .map((report) => `| ${report.fileName} | ${statusIcon(report.successful)} ${statusLabel(report.successful)} |`)
+    .map((report) => `| ${reportCell(report.fileName, previewBaseUrl)} | ${statusIcon(report.successful)} ${statusLabel(report.successful)} |`)
     .join("\n")
 
   const links = []
+  if (previewBaseUrl) {
+    links.push(`[Open HTML report](${htmlFileUrl(previewBaseUrl, "index.html")})`)
+  }
   if (runUrl) {
-    links.push(`[Workflow run and artifacts](${runUrl})`)
+    links.push(`[Workflow artifacts](${runUrl})`)
   }
   const extra = archiveIncluded
     ? `A zip of the original report folder is included in the **${artifactName}** artifact.`
     : `Inlined HTML is uploaded as the **${artifactName}** artifact.`
-  const linkBlock = links.length ? `\n${links.join(" | ")}\n` : "\n"
+  const previewNote = previewBaseUrl
+    ? " If an HTML link 404s, set GitHub Pages source to the `gh-pages` branch."
+    : ""
+  const linkBlock = links.length ? `\n${links.join(" · ")}\n` : "\n"
 
   return `${marker}
 ## ${name}
@@ -74,7 +108,7 @@ ${headline} (${reports.length} report${reports.length === 1 ? "" : "s"})
 | Report | Result |
 | --- | --- |
 ${rows}
-${linkBlock}${extra}
+${linkBlock}${extra}${previewNote}
 `
 }
 
@@ -133,6 +167,23 @@ async function prepareReports(options) {
     })
   })
 
+  writeFileSync(join(reportsDir, ".nojekyll"), "")
+  const hasIndex = reports.some((report) => report.fileName.toLowerCase() === "index.html")
+  if (!hasIndex && reports.length) {
+    const items = reports
+      .map((report) => {
+        const href = report.fileName.split("/").map(encodeURIComponent).join("/")
+        const label = report.fileName.replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        return `<li><a href="${href}">${label}</a> ${report.successful ? "passed" : "failed"}</li>`
+      })
+      .join("")
+    const title = String(name).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    writeFileSync(
+      join(reportsDir, "index.html"),
+      `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title></head><body><h1>${title}</h1><ul>${items}</ul></body></html>\n`
+    )
+  }
+
   let archiveIncluded = false
   if (publishArchive && reportStats.isDirectory()) {
     const archivePath = join(outputRoot, "html-reports.zip")
@@ -148,7 +199,8 @@ async function prepareReports(options) {
     failedCount,
     runUrl: options.runUrl,
     artifactName,
-    archiveIncluded
+    archiveIncluded,
+    previewBaseUrl: options.previewBaseUrl || ""
   })
 
   writeFileSync(
@@ -171,6 +223,8 @@ async function prepareReports(options) {
 module.exports = {
   buildCommentMarkdown,
   commentMarker,
+  githubPagesPreviewUrl,
+  htmlFileUrl,
   isTruthy,
   prepareReports,
   sanitizeArtifactName

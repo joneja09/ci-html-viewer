@@ -19,8 +19,8 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
-  pull-requests: write   # needed to comment on PRs
+  contents: write       # push HTML preview to gh-pages
+  pull-requests: write  # sticky PR comment
 
 jobs:
   test:
@@ -48,9 +48,12 @@ If this repository is renamed to `ci-html-viewer`, change that to `joneja09/ci-h
 | `fail-on-empty` | `true` | Fail when no HTML files are found |
 | `fail-on-failed-reports` | `false` | Fail the job after publishing when a report looks unsuccessful |
 | `comment-on-pr` | `true` | Post or update a sticky comment on `pull_request` workflows |
+| `pages-preview` | `true` | Publish inlined HTML to the `gh-pages` branch and link each report in the PR comment |
 | `upload-artifact` | `true` | Upload prepared reports as a workflow artifact |
 
-GitHub cannot embed a full HTML report inside a PR thread (comments are markdown). The comment is the summary; the inlined HTML lives on the workflow run as an artifact. Re-runs update the same sticky comment (`<!-- ci-html-viewer:Name -->`) instead of adding a new one.
+GitHub cannot embed a full HTML report inside a PR thread (comments are markdown). The comment is the scoreboard; each report name links to a GitHub Pages preview of that HTML file. Re-runs update the same sticky comment (`<!-- ci-html-viewer:Name -->`) instead of adding a new one.
+
+Enable **Settings → Pages → Deploy from branch `gh-pages`** once so those links render. Until that is set, the comment still posts and artifacts still upload; HTML links may 404. Preview deploy is best-effort and will not fail the job if the push is denied.
 
 Fork PRs only get a comment when the workflow token has `pull-requests: write`. Job summaries and artifacts still publish.
 

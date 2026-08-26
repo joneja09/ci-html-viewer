@@ -38,6 +38,10 @@ inputs:
     description: Post or update a sticky comment when the workflow runs on a pull request
     required: false
     default: "true"
+  pages-preview:
+    description: Publish inlined HTML to GitHub Pages (gh-pages branch) and link each report in the PR comment
+    required: false
+    default: "true"
   upload-artifact:
     description: Upload the prepared reports as a workflow artifact
     required: false
@@ -89,11 +93,37 @@ runs:
         path: ${{ steps.prepare.outputs.output-dir }}
         if-no-files-found: warn
 
+    - name: Publish HTML preview to GitHub Pages
+      id: preview
+      if: ${{ always() && inputs.pages-preview == 'true' && github.event_name == 'pull_request' && steps.prepare.outputs.output-dir != '' }}
+      continue-on-error: true
+      uses: peaceiris/actions-gh-pages@v4
+      with:
+        github_token: ${{ inputs.github-token }}
+        publish_dir: ${{ steps.prepare.outputs.output-dir }}/reports
+        destination_dir: pr/${{ github.event.pull_request.number }}/${{ steps.prepare.outputs.artifact-name }}
+        keep_files: true
+        enable_jekyll: false
+        commit_message: Preview HTML reports for PR ${{ github.event.pull_request.number }}
+
+    - name: Render PR comment
+      id: render
+      if: ${{ always() && steps.prepare.outputs.output-dir != '' }}
+      shell: bash
+      env:
+        OUTPUT_DIR: ${{ steps.prepare.outputs.output-dir }}
+        REPORT_NAME: ${{ inputs.name }}
+        PREVIEW_OUTCOME: ${{ steps.preview.outcome }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+      run: node "$GITHUB_ACTION_PATH/github-action/render-comment.js"
+
     - name: Comment on pull request
-      if: ${{ always() && inputs.comment-on-pr == 'true' && github.event_name == 'pull_request' && steps.prepare.outputs.comment-markdown != '' }}
+      if: ${{ always() && inputs.comment-on-pr == 'true' && github.event_name == 'pull_request' && steps.render.outputs.comment-markdown != '' }}
       uses: actions/github-script@v7
       env:
-        COMMENT_MARKDOWN: ${{ steps.prepare.outputs.comment-markdown }}
+        COMMENT_MARKDOWN: ${{ steps.render.outputs.comment-markdown }}
         REPORT_NAME: ${{ inputs.name }}
       with:
         github-token: ${{ inputs.github-token }}

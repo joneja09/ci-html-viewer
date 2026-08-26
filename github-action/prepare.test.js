@@ -6,6 +6,8 @@ const { tmpdir } = require("os")
 const {
   buildCommentMarkdown,
   commentMarker,
+  githubPagesPreviewUrl,
+  htmlFileUrl,
   isTruthy,
   prepareReports,
   sanitizeArtifactName
@@ -20,7 +22,28 @@ describe("helpers", () => {
   })
 
   test("sanitizeArtifactName strips illegal characters", () => {
-    assert.equal(sanitizeArtifactName("QA: Reports/v1"), "QA- Reports-v1")
+    assert.equal(sanitizeArtifactName("QA: Reports/v1"), "QA-Reports-v1")
+  })
+
+  test("githubPagesPreviewUrl builds a project Pages path", () => {
+    assert.equal(
+      githubPagesPreviewUrl({
+        owner: "acme",
+        repo: "ci-html-viewer",
+        prNumber: 7,
+        artifactName: "Fixture Reports"
+      }),
+      "https://acme.github.io/ci-html-viewer/pr/7/Fixture-Reports"
+    )
+    assert.equal(githubPagesPreviewUrl({ owner: "acme" }), "")
+  })
+
+  test("htmlFileUrl encodes each path segment", () => {
+    assert.equal(
+      htmlFileUrl("https://acme.github.io/repo/pr/1/reports", "nested/My Report.html"),
+      "https://acme.github.io/repo/pr/1/reports/nested/My%20Report.html"
+    )
+    assert.equal(htmlFileUrl("", "index.html"), "")
   })
 })
 
@@ -43,6 +66,31 @@ describe("buildCommentMarkdown", () => {
     assert.match(markdown, /nested\/fail\.html/)
     assert.match(markdown, /https:\/\/github.com\/acme\/repo\/actions\/runs\/9/)
     assert.match(markdown, /zip of the original report folder/)
+    assert.doesNotMatch(markdown, /\[index\.html\]\(/)
+  })
+
+  test("links each HTML file when a preview base URL is provided", () => {
+    const markdown = buildCommentMarkdown({
+      name: "Coverage",
+      reports: [
+        { fileName: "index.html", successful: true },
+        { fileName: "nested/fail.html", successful: false }
+      ],
+      failedCount: 1,
+      runUrl: "https://github.com/acme/repo/actions/runs/9",
+      artifactName: "Coverage",
+      archiveIncluded: false,
+      previewBaseUrl: "https://acme.github.io/repo/pr/7/Coverage"
+    })
+    assert.match(
+      markdown,
+      /\[index\.html\]\(https:\/\/acme\.github\.io\/repo\/pr\/7\/Coverage\/index\.html\)/
+    )
+    assert.match(
+      markdown,
+      /\[nested\/fail\.html\]\(https:\/\/acme\.github\.io\/repo\/pr\/7\/Coverage\/nested\/fail\.html\)/
+    )
+    assert.match(markdown, /\[Open HTML report\]\(https:\/\/acme\.github\.io\/repo\/pr\/7\/Coverage\/index\.html\)/)
   })
 })
 
@@ -71,8 +119,31 @@ describe("prepareReports", () => {
     assert.equal(result.failedCount, 0)
     const inlined = readFileSync(join(result.outputDir, "reports", "index.html"), "utf8")
     assert.match(inlined, /h1\{color:navy\}/)
+    assert.equal(require("fs").existsSync(join(result.outputDir, "reports", ".nojekyll")), true)
     assert.match(result.markdown, /Coverage/)
     assert.match(result.markdown, /https:\/\/example.test\/run\/1/)
+  })
+
+  test("writes a listing index when the reports have none", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gha-listing-"))
+    writeFileSync(join(dir, "newman-pass.html"), "<html><body>OK</body></html>")
+    mkdirSync(join(dir, "nested"), { recursive: true })
+    writeFileSync(join(dir, "nested", "deep.html"), "<html><body>Deep</body></html>")
+
+    const result = await prepareReports({
+      reportDir: dir,
+      name: "Fixture Reports",
+      outputDir: join(dir, "out"),
+      publishArchive: false
+    })
+
+    const listing = readFileSync(join(result.outputDir, "reports", "index.html"), "utf8")
+    assert.match(listing, /newman-pass\.html/)
+    assert.match(listing, /nested\/deep\.html/)
+    assert.equal(
+      require("fs").existsSync(join(result.outputDir, "reports", ".nojekyll")),
+      true
+    )
   })
 
   test("returns empty when no HTML is present", async () => {

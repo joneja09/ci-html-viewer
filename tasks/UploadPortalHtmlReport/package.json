@@ -10,7 +10,7 @@
   "author": "Jeff Jones",
   "license": "MIT",
   "dependencies": {
-    "azure-pipelines-task-lib": "^4.17.3",
+    "azure-pipelines-task-lib": "^5.280.3",
     "cheerio": "^1.0.0-rc.12",
     "dashify": "^2.0.0",
     "globby": "^11.1.0",
